@@ -91,8 +91,12 @@ int main() {
             }
         }
 
+        // TODO handle overruns
+        // mainly because otherwise this causes problems when you suspend the program and resume it later
+        // most basic form would be a while-loop over this that runs until deadline > current time
         deadline.tv_nsec += NSEC_PER_SEC / 1000 * config.timer_interval_ms;
         deadline.tv_sec += deadline.tv_nsec / NSEC_PER_SEC;
         deadline.tv_nsec %= NSEC_PER_SEC;
+
     }
 }

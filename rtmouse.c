@@ -51,6 +51,10 @@ struct Dwell_State state =
 };
 
 
+// TODO SIGHUP functionality isn't super useful for my goals.
+// I want to be able to save state and disable dwell if its not already,
+// then restore state. That way my eye-tracker can turn it off when active,
+// and then restore its state when inactive.
 void handle_unix_signal(int signal)
 {
     switch (signal)

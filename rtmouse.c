@@ -1,13 +1,13 @@
-#include <stdio.h>
+#include <errno.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <errno.h>
-#include <time.h>
-#include <signal.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <X11/Xlib.h>
-#include <X11/extensions/XTest.h>
 #include <X11/extensions/XInput2.h>
+#include <X11/extensions/XTest.h>
 
 #define TIMER_INTERVAL_MS 100
 
@@ -98,7 +98,8 @@ void initialize_x11_state()
     int evt, err;
     if (!XQueryExtension(state.display, "XInputExtension", &state.xi_extension_opcode, &evt, &err))
     {
-        // TODO handle error and do nothing?
+        fprintf(stderr, "initialize_x11_state: could not query XInputExtension\n");
+        exit(1);
     }
 
     // TODO does X have one root per monitor or one root in general?
@@ -109,6 +110,11 @@ void initialize_x11_state()
     m.deviceid = XIAllDevices;
     m.mask_len = XIMaskLen(XI_LASTEVENT);
     m.mask = (unsigned char *)calloc(m.mask_len, sizeof(char));
+    if (m.mask == NULL)
+    {
+        perror("initialize_x11_state: error allocating XIEventMask");
+        exit(1);
+    }
     XISetMask(m.mask, XI_RawButtonPress);
     XISetMask(m.mask, XI_RawButtonRelease);
     XISelectEvents(state.display, root, &m, 1);
@@ -324,7 +330,7 @@ int main()
         {
             if (errno != EINTR)
             {
-                // TODO error handling
+                perror("main: unexpected error while sleeping");
             }
         }
     }

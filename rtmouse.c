@@ -55,6 +55,11 @@ struct Dwell_State state =
 // I want to be able to save state and disable dwell if its not already,
 // then restore state. That way my eye-tracker can turn it off when active,
 // and then restore its state when inactive.
+// 
+// The way i see this working is
+// SIGHUP - toggle primary activity state
+// SIGUSR1 - enable override mode, activity masked to disabled state
+// SIGUSR2 - disable override mode, activity unmasked, is primary activity state
 void handle_unix_signal(int signal)
 {
     switch (signal)

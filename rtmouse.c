@@ -295,9 +295,9 @@ void loop()
     }
 
     const uint32_t max_time =
-        config.dwell_time > config.drag_time
+        (config.dwell_time > config.drag_time
             ? config.dwell_time
-            : config.drag_time;
+            : config.drag_time) + 1;
 
     if (is_cursor_moving())
     {
@@ -311,7 +311,7 @@ void loop()
         return;
     }
 
-    if (state.tick_count <= max_time)
+    if (state.tick_count < max_time)
     {
         state.tick_count++;
     }
@@ -320,7 +320,7 @@ void loop()
     {
         if (!config.drag_enabled || !state.we_are_dragging_mouse)
         {
-            state.tick_count = max_time + 1;
+            state.tick_count = max_time;
         }
     }
 
@@ -336,6 +336,7 @@ void loop()
             XTestFakeButtonEvent(state.display, primary_button, true, 0);
             // TODO: should we do some delay here?
             XTestFakeButtonEvent(state.display, primary_button, false, 0);
+            state.tick_count = max_time;
         }
         play_click_sound();
     }
@@ -345,6 +346,7 @@ void loop()
         uint8_t primary_button = get_primary_button_code();
         XTestFakeButtonEvent(state.display, primary_button, false, 0);
         state.we_are_dragging_mouse = false;
+        state.tick_count = max_time;
     }
 }
 

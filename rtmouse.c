@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/XTest.h>
@@ -41,7 +42,7 @@ struct Dwell_Config config =
     .dwell_time = 500 / TIMER_INTERVAL_MS,
     .drag_time = 500 / TIMER_INTERVAL_MS,
     .drag_enabled = true,
-    .sound_enabled = false
+    .sound_enabled = true
 };
 
 struct Dwell_State state =
@@ -92,7 +93,31 @@ void handle_unix_signal(int signal)
 
 void play_click_sound()
 {
+    if (!config.sound_enabled)
+    {
+        return;
+    }
     // TODO
+    // thoughts
+    // - aplay backend?
+    // - libmpv backend?
+    // - libsdl2
+    // - maybe all?
+    // - main goal: low latency
+    // - alt goal: volume control
+    pid_t pid = fork();
+    switch (pid)
+    {
+        case 0:
+            // in child, play audio
+            // TODO relative path for wav is bad, also cant guarantee aplay is here but execlp is probably more latency
+            execl("/bin/aplay", "aplay", "-q", "--buffer-size", "256", "./mousetool_tap.wav", NULL);
+            break;
+        case -1:
+            // in parent with error
+            perror("play_click_sound: error in fork()");
+            break;
+    }
 }
 
 void initialize_x11_state()

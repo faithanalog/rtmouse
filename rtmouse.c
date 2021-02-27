@@ -47,6 +47,8 @@ struct Dwell_Config
     uint32_t drag_time;
     bool drag_enabled;
     bool sound_enabled;
+    bool write_status;
+    const char* status_file;
 };
 
 struct Dwell_State
@@ -70,7 +72,9 @@ struct Dwell_Config config =
     .dwell_time = 500 / TIMER_INTERVAL_MS,
     .drag_time = 500 / TIMER_INTERVAL_MS,
     .drag_enabled = true,
-    .sound_enabled = true
+    .sound_enabled = true,
+    .write_status = true,
+    .status_file = "/tmp/rtmouse-status.txt"
 };
 
 struct Dwell_State state =
@@ -78,6 +82,24 @@ struct Dwell_State state =
     .active = true,
     .just_became_active = true
 };
+
+void write_status_if_enabled() {
+    if (config.write_status) {
+        FILE* stat_file = fopen(config.status_file, "w");
+        if (!stat_file) {
+            char err_buff[256];
+            snprintf(err_buff, sizeof(err_buff), "write_status_if_enabled: error opening status file %s", config.status_file);
+            perror(err_buff);
+            return;
+        }
+        if (state.active) {
+            fprintf(stat_file, "rtmouse enabled");
+        } else {
+            fprintf(stat_file, "rtmouse disabled");
+        }
+        fclose(stat_file);
+    }
+}
 
 
 // TODO SIGHUP functionality isn't super useful for my goals.
@@ -91,6 +113,8 @@ struct Dwell_State state =
 // SIGUSR2 - disable override mode, activity unmasked, is primary activity state
 void handle_unix_signal(int signal)
 {
+    bool was_active = state.active;
+
     switch (signal)
     {
         case SIGHUP:
@@ -113,7 +137,9 @@ void handle_unix_signal(int signal)
             break;
     }
 
-    if (state.active)
+    write_status_if_enabled();
+
+    if (state.active && !was_active)
     {
         state.just_became_active = true;
     }
@@ -139,7 +165,7 @@ void play_click_sound()
         case 0:
             // in child, play audio
             // TODO relative path for wav is bad, also cant guarantee aplay is here but execlp is probably more latency
-            execl("/bin/aplay", "aplay", "-q", "--buffer-size", "256", "./mousetool_tap.wav", NULL);
+            execl("/bin/aplay", "aplay", "-q", "--buffer-size", "256", "/usr/local/share/rtmouse/mousetool_tap.wav", NULL);
             break;
         case -1:
             // in parent with error
@@ -368,6 +394,8 @@ int main()
     struct timespec deadline;
     clock_gettime(CLOCK_MONOTONIC, &deadline);
 
+    write_status_if_enabled();
+
     // Poll mouse movement until termination. 
     for (;;)
     {
@@ -388,7 +416,7 @@ int main()
 
         while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &deadline, NULL))
         {
-            if (errno != EINTR)
+            if (errno != EINTR && errno != EAGAIN)
             {
                 perror("main: unexpected error while sleeping");
             }

@@ -51,6 +51,8 @@ struct Dwell_Config
     const char* status_file;
 };
 
+#include "config.h"
+
 struct Dwell_State
 {
     bool active;
@@ -65,17 +67,6 @@ struct Dwell_State
     Display *display;
     int xi_extension_opcode;
 }; 
-
-struct Dwell_Config config =
-{
-    .min_movement_pixels = 10,
-    .dwell_time = 500 / TIMER_INTERVAL_MS,
-    .drag_time = 500 / TIMER_INTERVAL_MS,
-    .drag_enabled = true,
-    .sound_enabled = true,
-    .write_status = true,
-    .status_file = "/tmp/rtmouse-status.txt"
-};
 
 struct Dwell_State state =
 {

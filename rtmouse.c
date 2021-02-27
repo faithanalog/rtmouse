@@ -83,21 +83,25 @@ struct Dwell_State state =
     .just_became_active = true
 };
 
-void write_status_if_enabled() {
+void write_status(const char* status) {
     if (config.write_status) {
         FILE* stat_file = fopen(config.status_file, "w");
         if (!stat_file) {
             char err_buff[256];
-            snprintf(err_buff, sizeof(err_buff), "write_status_if_enabled: error opening status file %s", config.status_file);
+            snprintf(err_buff, sizeof(err_buff), "write_active_status: error opening status file %s", config.status_file);
             perror(err_buff);
             return;
         }
-        if (state.active) {
-            fprintf(stat_file, "rtmouse enabled");
-        } else {
-            fprintf(stat_file, "rtmouse disabled");
-        }
+        fputs(status, stat_file);
         fclose(stat_file);
+    }
+}
+
+void write_active_status() {
+    if (state.active) {
+        write_status("rtmouse enabled");
+    } else {
+        write_status("rtmouse disabled");
     }
 }
 
@@ -137,12 +141,17 @@ void handle_unix_signal(int signal)
             break;
     }
 
-    write_status_if_enabled();
+    write_active_status();
 
     if (state.active && !was_active)
     {
         state.just_became_active = true;
     }
+}
+
+void handle_termination_signal(int signal) {
+    write_status("rtmouse terminated");
+    exit(0);
 }
 
 void play_click_sound()
@@ -380,13 +389,17 @@ void loop()
 #define NSEC_PER_SEC 1000000000
 int main()
 {
-    printf("Hello, world\n");
+    printf("rtmouse launching\n");
 
     // basic IPC via signals
     // SIGHUP toggles activaton, SIGUSR1 enables, SIGUSR2 disables.
     signal(SIGHUP, handle_unix_signal);
     signal(SIGUSR1, handle_unix_signal);
     signal(SIGUSR2, handle_unix_signal);
+    
+    signal(SIGINT, handle_termination_signal);
+    signal(SIGTERM, handle_termination_signal);
+    signal(SIGKILL, handle_termination_signal);
 
     initialize_x11_state();
 
@@ -394,7 +407,7 @@ int main()
     struct timespec deadline;
     clock_gettime(CLOCK_MONOTONIC, &deadline);
 
-    write_status_if_enabled();
+    write_active_status();
 
     // Poll mouse movement until termination. 
     for (;;)

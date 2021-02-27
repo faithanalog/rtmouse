@@ -74,10 +74,13 @@ struct Dwell_State state =
     .just_became_active = true
 };
 
-void write_status(const char* status) {
-    if (config.write_status) {
+void write_status(const char* status)
+{
+    if (config.write_status)
+    {
         FILE* stat_file = fopen(config.status_file, "w");
-        if (!stat_file) {
+        if (!stat_file)
+        {
             char err_buff[256];
             snprintf(err_buff, sizeof(err_buff), "write_active_status: error opening status file %s", config.status_file);
             perror(err_buff);
@@ -88,8 +91,10 @@ void write_status(const char* status) {
     }
 }
 
-void write_active_status() {
-    if (state.active) {
+void write_active_status()
+{
+    if (state.active)
+    {
         write_status("rtmouse enabled");
     } else {
         write_status("rtmouse disabled");
@@ -140,7 +145,8 @@ void handle_unix_signal(int signal)
     }
 }
 
-void handle_termination_signal(int signal) {
+void handle_termination_signal(int signal)
+{
     write_status("rtmouse terminated");
     exit(0);
 }

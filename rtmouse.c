@@ -34,6 +34,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include <X11/Xlib.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/XTest.h>
@@ -165,19 +167,34 @@ void play_click_sound()
     // - maybe all?
     // - main goal: low latency
     // - alt goal: volume control
+
+    // double-fork to prevent zombies
     pid_t pid = fork();
     switch (pid)
     {
         case 0:
-            // in child, play audio
-            // TODO relative path for wav is bad, also cant guarantee aplay is here but execlp is probably more latency
-            execl("/bin/aplay", "aplay", "-q", "--buffer-size", "256", "/usr/local/share/rtmouse/mousetool_tap.wav", NULL);
+            ; pid_t pid_inner = fork();
+            switch (pid_inner)
+            {
+                case 0:
+                    // in child, play audio
+                    // TODO relative path for wav is bad, also cant guarantee aplay is here but execlp is probably more latency
+                    execl("/usr/bin/aplay", "aplay", "-q", "--buffer-size", "256", "/usr/local/share/rtmouse/mousetool_tap.wav", NULL);
+                    // exit if execl failed
+                    exit(1);
+                    break;
+                case -1:
+                    perror("play_click_sound: error in fork()");
+                    break;
+            }
+            exit(0);
             break;
         case -1:
             // in parent with error
             perror("play_click_sound: error in fork()");
             break;
     }
+    waitpid(pid, NULL, 0);
 }
 
 void initialize_x11_state()

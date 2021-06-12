@@ -57,14 +57,9 @@ struct Dwell_Config
 
 struct Dwell_State
 {
-    bool active;
-    int32_t current_x;
-    int32_t current_y;
     int32_t tick_count;
-    int32_t dwell_time;
-    int32_t drag_time;
+    bool active;
     bool just_became_active;
-    bool mouse_moving;
     bool we_are_dragging_mouse;
     Display *display;
     int xi_extension_opcode;

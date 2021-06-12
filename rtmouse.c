@@ -42,6 +42,7 @@
 
 #define TIMER_INTERVAL_MS 100
 
+// See config.h for description of variables
 struct Dwell_Config
 {
     uint32_t min_movement_pixels;
@@ -55,22 +56,34 @@ struct Dwell_Config
 
 #include "config.h"
 
+// State shared across functions in this code. If this program was any bigger I wouldn't make this global,
+// but it's not, so I'm just going with this so I don't have to manually pass a state variable around
+// between everything.
+//
+// wish i had haskell State monad...
 struct Dwell_State
 {
-    int32_t tick_count;
+    // is rtmouse currently performing dwell-click functionality
     bool active;
+
+    // set when active is first set to true, signals main loop to assume mouse is not currently moving
     bool just_became_active;
-    bool we_are_dragging_mouse;
+
+    // X11 display, needed by all functions messing with X11. Set at the start of the program and should not change after
     Display *display;
+
+    // xinput extension code, used to filter events down to only xinput events
     int xi_extension_opcode;
 }; 
 
-struct Dwell_State state =
+// Start up in active mode
+struct Dwell_State shared_state =
 {
     .active = true,
     .just_became_active = true
 };
 
+// Write the provided status to the status file. the status file can be read by things like i3status to display whether rtmouse is running/stopped/terminated
 void write_status(const char* status)
 {
     if (config.write_status)
@@ -90,7 +103,7 @@ void write_status(const char* status)
 
 void write_active_status()
 {
-    if (state.active)
+    if (shared_state.active)
     {
         write_status("rtmouse enabled");
     } else {
@@ -101,7 +114,7 @@ void write_active_status()
 
 // TODO SIGHUP functionality isn't super useful for my goals.
 // I want to be able to save state and disable dwell if its not already,
-// then restore state. That way my eye-tracker can turn it off when active,
+// then restore shared_state. That way my eye-tracker can turn it off when active,
 // and then restore its state when inactive.
 // 
 // The way i see this working is
@@ -110,14 +123,23 @@ void write_active_status()
 // SIGUSR2 - disable override mode, activity unmasked, is primary activity state
 void handle_unix_signal(int signal)
 {
-    bool was_active = state.active;
+    // TODO: there's some problems here.
+    // 1. We're setting global state from the signal handler which is prone to race conditions. I've written
+    //    my code so it shouldn't actually matter, but it's still a thing to be aware of.
+    // 2. We're doing file IO from a signal handler which probably isn't good.
+    // 
+    // What we should actually do is send a message to the main thread with the signal ID so it can handle
+    // these things. The simplest way without busting out concurrency libraries is probably just a
+    // ring-buffer of signals, with a write-head only incremented by this function and a read-head
+    // only incremented my the main loop. I'm not sure how reliable that is in C on a modern computer though.
+    bool was_active = shared_state.active;
 
     switch (signal)
     {
         case SIGHUP:
-            state.active = !state.active;
-            printf("Toggled activity due to SIGHUP. state.active = ");
-            if (state.active)
+            shared_state.active = !shared_state.active;
+            printf("Toggled activity due to SIGHUP. shared_state.active = ");
+            if (shared_state.active)
             {
                 printf("true\n");
             } else {
@@ -125,23 +147,24 @@ void handle_unix_signal(int signal)
             }
             break;
         case SIGUSR1:
-            state.active = true;
-            printf("Enabled activity due to SIGUSR1. state.active = true\n");
+            shared_state.active = true;
+            printf("Enabled activity due to SIGUSR1. shared_state.active = true\n");
             break;
         case SIGUSR2:
-            state.active = false;
-            printf("Disabled activity due to SIGUSR2. state.active = false\n");
+            shared_state.active = false;
+            printf("Disabled activity due to SIGUSR2. shared_state.active = false\n");
             break;
     }
 
     write_active_status();
 
-    if (state.active && !was_active)
+    if (shared_state.active && !was_active)
     {
-        state.just_became_active = true;
+        shared_state.just_became_active = true;
     }
 }
 
+// TODO: Same deal as the pitfalls with the other signal handler
 void handle_termination_signal(int signal)
 {
     write_status("rtmouse terminated");
@@ -173,7 +196,6 @@ void play_click_sound()
             {
                 case 0:
                     // in child, play audio
-                    // TODO relative path for wav is bad, also cant guarantee aplay is here but execlp is probably more latency
                     execl("/usr/bin/aplay", "aplay", "-q", "--buffer-size", "256", "/usr/local/share/rtmouse/mousetool_tap.wav", NULL);
                     // exit if execl failed
                     exit(1);
@@ -192,20 +214,21 @@ void play_click_sound()
     waitpid(pid, NULL, 0);
 }
 
+// Initialize the shared display pointer, and the xinput extension. Also request mouse events.
 void initialize_x11_state()
 {
-    state.display = XOpenDisplay(NULL);
+    shared_state.display = XOpenDisplay(NULL);
 
-    // you have to query an extension before you can use it
+    // you have to query an extension before you can use it. we need the opcode anyway for event processing
     int evt, err;
-    if (!XQueryExtension(state.display, "XInputExtension", &state.xi_extension_opcode, &evt, &err))
+    if (!XQueryExtension(shared_state.display, "XInputExtension", &shared_state.xi_extension_opcode, &evt, &err))
     {
         fprintf(stderr, "initialize_x11_state: could not query XInputExtension\n");
         exit(1);
     }
 
     // TODO does X have one root per monitor or one root in general?
-    Window root = DefaultRootWindow(state.display);
+    Window root = DefaultRootWindow(shared_state.display);
 
     // Request mouse button presses and releases
     XIEventMask m;
@@ -219,37 +242,43 @@ void initialize_x11_state()
     }
     XISetMask(m.mask, XI_RawButtonPress);
     XISetMask(m.mask, XI_RawButtonRelease);
-    XISelectEvents(state.display, root, &m, 1);
-    XSync(state.display, false);
+    XISelectEvents(shared_state.display, root, &m, 1);
+    XSync(shared_state.display, false);
     free(m.mask);
 }
 
 // We don't dwell-click if the user manually clicks or scrolls before movement
-// stops. This polls and tracks mouse events, and returns true if any
-// inhibiting button is currently pressed, which allows a held mouse to keep
-// inhibiting dwell-click though multiple start/stop cycles. It might be better
-// to just stop the dwell functionality as long as a button is pressed, and start
-// again on release. That would handle scrolling too. This is just how we did it
-// in kmousetool.
+// stops, of it they are manually click-dragging. This polls and tracks mouse
+// events, and returns true if any inhibiting button is currently pressed, which
+// allows a held mouse to keep inhibiting dwell-click though multiple start/stop
+// cycles.
+// 
+// It might be better to just stop the dwell functionality as long as a button
+// is pressed, and start again on release. That would handle scrolling too,
+// because of how `just_became_active` works. The current method is just how we
+// hacekd it into kmousetool.
 bool is_click_inhibited()
 {
-    // The uninhibit mask delays uninhibiting bits from button releases by
+    // Bitmask of buttons currently pressed that can inhibit dwell functionality.
+    // When this is zero, dwell is uninhibited.
+    static uint64_t inhibit_mask;
+
+    // The uninhibit mask delays inhibit bit-clears from button releases by
     // one processing cycle. That way, scroll events, which fire a press
     // and release simultaneously, can actually inhibit the dwell click.
-    static uint64_t inhibit_mask;
     static uint64_t uninhibit_mask;
 
     inhibit_mask &= ~uninhibit_mask;
     uninhibit_mask = 0;
 
-    while (XPending(state.display) > 0)
+    while (XPending(shared_state.display) > 0)
     {
         XEvent ev;
         XGenericEventCookie *cookie = &ev.xcookie;
-        XNextEvent(state.display, &ev);
-        if (XGetEventData(state.display, cookie)
+        XNextEvent(shared_state.display, &ev);
+        if (XGetEventData(shared_state.display, cookie)
                 && cookie->type == GenericEvent
-                && cookie->extension == state.xi_extension_opcode)
+                && cookie->extension == shared_state.xi_extension_opcode)
         {
             XIRawEvent *data = (XIRawEvent *)cookie->data;
             switch (cookie->evtype)
@@ -276,8 +305,14 @@ bool is_click_inhibited()
 // threshold thing, because it has weird behavior sometimes.
 bool is_cursor_moving()
 {
+    // mouse position on last execution of this function. Only updated if the mouse is actually moving.
+    // If it's not moving we leave this as-is. Basically once dist(current, old) > threshold that's when
+    // movement actually starts. Kind of a weird way to implement it, but it's what kmousetool did.
     static int32_t old_x;
     static int32_t old_y;
+    
+    // did we think the cursor was moving during the last execution?
+    // there's different behavior for determining whether it started moving and whether it stopped.
     static bool moving;
 
     // XQueryPointer returns whether the mouse is on the same screen as the
@@ -287,7 +322,7 @@ bool is_cursor_moving()
     // about returned in vars we never use, but hey, that's X11.
     int root_x;
     int root_y;
-    Window root_win = DefaultRootWindow(state.display);
+    Window root_win = DefaultRootWindow(shared_state.display);
 
     int child_x;
     int child_y;
@@ -295,11 +330,14 @@ bool is_cursor_moving()
 
     unsigned int button_mask;
 
-    XQueryPointer(state.display, root_win, &root_win, &child_win, &root_x, &root_y, &child_x, &child_y, &button_mask);
+    XQueryPointer(shared_state.display, root_win, &root_win, &child_win, &root_x, &root_y, &child_x, &child_y, &button_mask);
 
     uint32_t dx = root_x - old_x;
     uint32_t dy = root_y - old_y;
     uint32_t distance_sq = dx * dx + dy * dy;
+
+    // If we were moving last tick, the threshold for movement is just a pixel. If we weren't moving, then
+    // it's whatever the configured threshold is.
     uint32_t movement_threshold =
         moving
             ? 1
@@ -316,11 +354,11 @@ bool is_cursor_moving()
 }
 
 // Get the button code that corresponds to the primary mouse button
-// (traditional left-click)
+// (traditionally left-click)
 uint8_t get_primary_button_code()
 {
     unsigned char primary_button;
-    if (XGetPointerMapping(state.display, &primary_button, 1) < 1)
+    if (XGetPointerMapping(shared_state.display, &primary_button, 1) < 1)
     {
         // fallback to assuming the primary mouse button is button 1 if
         // no mapping is returned.
@@ -330,67 +368,95 @@ uint8_t get_primary_button_code()
     return primary_button;
 }
 
+// main loop. called once per timer interval
 void loop()
 {
+    // Are we in the middle of a mouse-drag movement? (mouse button currently held down)
+    static bool we_are_dragging_mouse;
+
+    // Used to track how long the mouse has been idle.
+    static uint32_t idle_timer;
+
     // idle in inactive mode
-    if (!state.active)
+    if (!shared_state.active)
     {
         return;
     }
 
+    // Maimum value of idle_timer. This is the off-state, when no mouse movement is occurring and no dwell-timer is in progress.
     const uint32_t max_time =
         (config.dwell_time > config.drag_time
             ? config.dwell_time
             : config.drag_time) + 1;
 
+    // If the mouse is currently moving
     if (is_cursor_moving())
     {
-        if (state.just_became_active)
+        if (shared_state.just_became_active)
         {
-            state.just_became_active = false;
-            state.tick_count = max_time + 1;
+            // Ignore any mouse movement on the first loop after we became active
+            shared_state.just_became_active = false;
+            idle_timer = max_time + 1;
         } else {
-            state.tick_count = 0;
+            // Otherwise, reset the idle_timer to 0
+            idle_timer = 0;
         }
         return;
     }
 
-    if (state.tick_count < max_time)
+    // Mouse is idle, increment idle_timer
+    if (idle_timer < max_time)
     {
-        state.tick_count++;
+        idle_timer++;
     }
 
+    // Is dwell-click inhibited? this happens if the user manually clicks or scrolls the mouse
     if (is_click_inhibited())
     {
-        if (!config.drag_enabled || !state.we_are_dragging_mouse)
+        // If we're not dragging the mouse, we set idle_timer to max_time to stop further dwell processing.
+        // If we are dragging the mouse, we actually want processing to continue, otherwise the left-click
+        // can get stuck in the down-state.
+        if (!config.drag_enabled || !we_are_dragging_mouse)
         {
-            state.tick_count = max_time;
+            idle_timer = max_time;
         }
     }
 
-    if (state.tick_count == config.dwell_time && !state.we_are_dragging_mouse)
+    // If the mouse has been idle for config.dwell_time ticks, and we aren't dragging
+    if (idle_timer == config.dwell_time && !we_are_dragging_mouse)
     {
         uint8_t primary_button = get_primary_button_code();
         if (config.drag_enabled)
         {
-            XTestFakeButtonEvent(state.display, primary_button, true, 0);
-            state.we_are_dragging_mouse = true;
-            state.tick_count = 0;
+            // Mouse-down if drag functionality is enabled. mouse-up will be issued later.
+            XTestFakeButtonEvent(shared_state.display, primary_button, true, 0);
+
+            // Reset idle_timer and start dragging the mouse
+            we_are_dragging_mouse = true;
+            idle_timer = 0;
         } else {
-            XTestFakeButtonEvent(state.display, primary_button, true, 0);
+            // Just do a mouse click, there's no drag to wait for. Note this means that the click
+            // functionality is more responsive when drag functionality is off.
+            XTestFakeButtonEvent(shared_state.display, primary_button, true, 0);
             // TODO: should we do some delay here?
-            XTestFakeButtonEvent(state.display, primary_button, false, 0);
-            state.tick_count = max_time;
+            XTestFakeButtonEvent(shared_state.display, primary_button, false, 0);
+
+            // dwell processing is done
+            idle_timer = max_time;
         }
         play_click_sound();
     }
 
-    if (state.tick_count == config.drag_time && state.we_are_dragging_mouse)
+    // If the mouse has been idle for config.drag_time ticks, and we are dragging
+    if (idle_timer == config.drag_time && we_are_dragging_mouse)
     {
+        // Release the mouse button
         uint8_t primary_button = get_primary_button_code();
-        XTestFakeButtonEvent(state.display, primary_button, false, 0);
-        state.we_are_dragging_mouse = false;
-        state.tick_count = max_time;
+        XTestFakeButtonEvent(shared_state.display, primary_button, false, 0);
+
+        // dwell processing is done
+        we_are_dragging_mouse = false;
+        idle_timer = max_time;
     }
 }
 

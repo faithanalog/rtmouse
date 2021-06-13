@@ -332,8 +332,8 @@ bool is_cursor_moving()
 
     XQueryPointer(shared_state.display, root_win, &root_win, &child_win, &root_x, &root_y, &child_x, &child_y, &button_mask);
 
-    uint32_t dx = root_x - old_x;
-    uint32_t dy = root_y - old_y;
+    int32_t dx = root_x - old_x;
+    int32_t dy = root_y - old_y;
     uint32_t distance_sq = dx * dx + dy * dy;
 
     // If we were moving last tick, the threshold for movement is just a pixel. If we weren't moving, then
